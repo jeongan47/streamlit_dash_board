@@ -289,40 +289,42 @@ with tab1:
             text=alt.Text('Cases:Q', format=',')
         )
 
-        # 2023년 이슈 표시
-        anno_df = pd.DataFrame([{
-            "Year": 2023, 
-            "Label": "딥보이스 상용화"
-        }])
-        
+        # --- (차트 만들기 직전) Year 타입 통일 ---
+        df_types["Year"] = pd.to_numeric(df_types["Year"], errors="coerce").fillna(0).astype(int)
+        df_total["Year"] = pd.to_numeric(df_total["Year"], errors="coerce").fillna(0).astype(int)
+
+        # x축 순서(도메인) 고정: df_total 기준으로 2016~2025 같은 순서 유지
+        year_order = sorted(df_total["Year"].dropna().unique().tolist())
+
+        # --- base / line_base의 x를 '동일한 sort'로 고정 ---
+        x_year = alt.X("Year:O", title="연도", sort=year_order)
+
+        base = alt.Chart(df_types).encode(x=x_year)
+        line_base = alt.Chart(df_total).encode(x=x_year)
+
+        # --- 2023 anno도 Year 타입 동일하게 + 동일 sort 적용 ---
+        anno_df = pd.DataFrame([{"Year": 2023, "Label": "딥보이스 상용화"}])
+
         rule = alt.Chart(anno_df).mark_rule(
-            color='red', strokeDash=[4, 4], opacity=0.7
+            color="red", strokeDash=[4, 4], opacity=0.7
         ).encode(
-            x=alt.X('Year:O'),
-            y=alt.value(310), 
-            y2=alt.value(20) 
+            x=x_year
         )
 
         text_top = alt.Chart(anno_df).mark_text(
-            color='red', dy=0, fontSize=12, fontWeight='bold', align='center', baseline='top'
+            color="red", dy=6, fontSize=12, fontWeight="bold",
+            align="center", baseline="top"
         ).encode(
-            x=alt.X('Year:O'),
-            y=alt.value(0), 
-            text='Label'
+            x=x_year,
+            y=alt.value(0),
+            text="Label:N"
         )
+
+
 
         layer_bar_group = bars + text_loan + text_imperson
         layer_line_group = lines + line_text + rule + text_top
-        
-        combined = alt.layer(
-            layer_bar_group, 
-            layer_line_group
-        ).resolve_scale(
-            y='independent'
-        ).properties(
-            height=400
-        )
-        
+        combined = alt.layer(layer_bar_group, layer_line_group).resolve_scale(y="independent").properties(height=400)
         st.altair_chart(combined, use_container_width=True)
 
         # ------------------------------------------------------------------
@@ -492,22 +494,40 @@ with tab2:
             with col_trend:
                 st.markdown("##### 연령대별 피해 추이 (Trend)")
 
+                # -----------------------------
+                # 0) Year 타입 통일 + x축 순서 고정 (웹에서 룰 튀는 현상 방지)
+                # -----------------------------
+                age_long_f["Year"] = pd.to_numeric(age_long_f["Year"], errors="coerce").fillna(0).astype(int)
+
+                year_order = sorted(age_long_f["Year"].unique().tolist())
+                x_year = alt.X("Year:O", title="연도", sort=year_order)
+
+                # -----------------------------
+                # 1) Trend 라인
+                # -----------------------------
                 age_line = alt.Chart(age_long_f).mark_line(point=True).encode(
-                    x=alt.X("Year:O", title="연도"),
+                    x=x_year,
                     y=alt.Y("Victims:Q", title="피해자 수(명)"),
                     color=alt.Color("AgeGroup:N", legend=alt.Legend(title="연령대")),
-                    tooltip=["Year", "AgeGroup", alt.Tooltip("Victims", format=",", title="피해자 수")]
+                    tooltip=["Year:O", "AgeGroup:N", alt.Tooltip("Victims:Q", format=",", title="피해자 수")]
                 ).properties(height=450)
 
-                rule = alt.Chart(pd.DataFrame({'Year': [2025]})).mark_rule(color='red', strokeDash=[4,4]).encode(x='Year:O')
+                # -----------------------------
+                # 2) 2025 강조 룰 (x 인코딩 동일하게)
+                # -----------------------------
+                rule_df = pd.DataFrame({"Year": [2025]})
+                rule = alt.Chart(rule_df).mark_rule(color="red", strokeDash=[4, 4]).encode(x=x_year)
 
                 st.altair_chart(age_line + rule, use_container_width=True)
 
-                # ✅ 여기부터: "그래프 밑"에 고정 배치되는 INFO
+                # -----------------------------
+                # 3) 그래프 밑 INFO (기존 로직 유지, Year 타입 일치)
+                # -----------------------------
+                target_year_age = int(target_year_age)  # selectbox 값이 str로 올 때 대비
                 y_df = age_long_f[age_long_f["Year"] == target_year_age].copy()
                 total_v = float(y_df["Victims"].sum()) if not y_df.empty else 0.0
 
-                def _pct(x, total): 
+                def _pct(x, total):
                     return (x / total * 100.0) if total > 0 else 0.0
 
                 if not y_df.empty and total_v > 0:
@@ -517,7 +537,6 @@ with tab2:
                     top1_v = float(top1["Victims"])
                     top1_pct = _pct(top1_v, total_v)
 
-                    # 청년층(20대이하+30대)
                     youth_groups = [g for g in ["20대이하", "30대"] if g in y_df["AgeGroup"].unique()]
                     youth_v = float(y_df[y_df["AgeGroup"].isin(youth_groups)]["Victims"].sum()) if youth_groups else 0.0
                     youth_pct = _pct(youth_v, total_v)
@@ -714,10 +733,25 @@ with tab3:
                         })
                         df_arr["gap"] = df_arr["Cases"] - df_arr["Arrest_Cases"]
 
+                        # -----------------------------
+                        # ✅ 색상/강조 규칙
+                        # - 모든 범죄: Loss Area는 항상 채움(투명도 너무 낮지 않게)
+                        # - 지능범죄: 더 강하게 강조
+                        # -----------------------------
                         is_highlight = (crime == HIGHLIGHT_CRIME)
-                        red = "#FF5252" if is_highlight else "#90A4AE"
-                        blue = "#448AFF" if is_highlight else "#B0BEC5"
-                        fill_rgba = "rgba(255,82,82,0.2)" if is_highlight else "rgba(144,164,174,0.18)"
+
+                        # ✅ 발생 라인: 전부 빨강(강조는 더 진하게)
+                        red_line = "#FF5252" if is_highlight else "#FF6B6B"
+
+                        # ✅ 검거 라인: 전부 파랑(강조는 더 진하게)
+                        blue_line = "#448AFF" if is_highlight else "#64B5F6"
+
+                        # ✅ Loss Area 채움: 전부 빨강(강조는 더 진하게/불투명)
+                        fill_rgba = "rgba(255,82,82,0.32)" if is_highlight else "rgba(255,82,82,0.22)"
+
+                        # 선 굵기(선택)
+                        w_occ = 4 if is_highlight else 3
+                        w_arr = 2 if is_highlight else 2
 
                         fig_loss = go.Figure()
 
@@ -725,11 +759,11 @@ with tab3:
                         fig_loss.add_trace(go.Scatter(
                             x=df_arr["Year"], y=df_arr["Arrest_Cases"],
                             name="검거(대응)", mode="lines",
-                            line=dict(color=blue, width=2),
+                            line=dict(color=blue_line, width=w_arr),
                             hovertemplate="%{x}년 검거: %{y:,.0f}건<extra></extra>",
                         ))
 
-                        # 발생>검거 구간만 채우기
+                        # 발생>검거 구간만 채우기 (핵심 트릭 동일)
                         y_fill = [c if c > a else a for c, a in zip(df_arr["Cases"], df_arr["Arrest_Cases"])]
                         fig_loss.add_trace(go.Scatter(
                             x=df_arr["Year"], y=y_fill,
@@ -738,12 +772,12 @@ with tab3:
                             showlegend=False, hoverinfo="skip",
                         ))
 
-                        # 발생(Red)
+                        # 발생(Red/Gray)
                         fig_loss.add_trace(go.Scatter(
                             x=df_arr["Year"], y=df_arr["Cases"],
                             name="발생", mode="lines+markers",
-                            line=dict(color=red, width=4),
-                            marker=dict(size=6, color=red),
+                            line=dict(color=red_line, width=w_occ),
+                            marker=dict(size=6, color=red_line),
                             hovertemplate="%{x}년 발생: %{y:,.0f}건<extra></extra>",
                         ))
 
@@ -762,18 +796,20 @@ with tab3:
                             hovermode="x unified",
                             margin=dict(l=20, r=20, t=70, b=20),
                         )
+
                         st.plotly_chart(fig_loss, use_container_width=True)
 
                         st.error(
                             f"""
                             **{crime} 차트해석**
-                            - **붉은 영역:** {total_gap:,.0f}건 (2016~2024 발생 초과 누적)
+                            - **붉은/회색 채움 영역:** {total_gap:,.0f}건 (2016~2024 발생 초과 누적)
                             - **미검거 최다 발생 연도:** {max_gap_year}년 (발생이 검거보다 {max_gap:,.0f}건 많음)
-                            - 항상 대응이 발생을 뒤쫓는 양상을 나타내어 예방/차단의 중요도가 커지고 있음
+                            - 발생이 검거를 상회하는 구간이 반복되므로 **사전 예방/차단의 중요도**가 큽니다.
                             """
                         )
                 else:
                     st.info("검거 양상을 표시할 범죄를 선택하세요.")
+
 
             st.markdown("---")
 
@@ -1024,52 +1060,182 @@ with tab4:
         return real_specs, fake_specs, freqs
 
     # 3. 시각화
+    # ==============================================================================
+# [Audio Spectrum] 배포/웹 환경 안정화 버전 (디코딩/NaN/길이불일치 방어)
+# - calculate_frequency_stats()는 그대로 사용
+# - 차트가 "아예 안 뜨는" 상황을 try/except + 유효성 체크로 방지
+# ==============================================================================
+
+# 3. 시각화
     if not real_files_list or not fake_files_list:
         st.warning("분석할 오디오 파일(문장*.m4a, 딥보이스*.mp3)을 폴더에서 찾지 못했습니다.")
     else:
-        with st.spinner("주파수 스펙트럼 분석 중..."):
-            real_specs, fake_specs, freqs = calculate_frequency_stats(real_files_list, fake_files_list)
+        # (선택) 디버그 표시
+        # st.write("real files:", len(real_files_list), "fake files:", len(fake_files_list))
+        # st.write("sample real:", real_files_list[:1])
+        # st.write("sample fake:", fake_files_list[:1])
 
-        if real_specs is not None and fake_specs is not None:
+        with st.spinner("주파수 스펙트럼 분석 중..."):
+            try:
+                real_specs, fake_specs, freqs = calculate_frequency_stats(real_files_list, fake_files_list)
+            except Exception as e:
+                st.error("오디오 분석 단계에서 오류가 발생했습니다. (배포 환경에서는 mp3/m4a 디코딩 문제 가능성이 큽니다)")
+                st.exception(e)
+                st.stop()
+
+        if real_specs is None or fake_specs is None or freqs is None:
+            st.warning("스펙트럼 분석 결과가 비어 있어 차트를 표시할 수 없습니다.")
+            st.stop()
+
+        # -----------------------------
+        # 1) 통계 계산
+        # -----------------------------
+        try:
             mean_real = np.mean(real_specs, axis=0)
             min_real = np.min(real_specs, axis=0)
             max_real = np.max(real_specs, axis=0)
+
             mean_fake = np.mean(fake_specs, axis=0)
             min_fake = np.min(fake_specs, axis=0)
             max_fake = np.max(fake_specs, axis=0)
+        except Exception as e:
+            st.error("스펙트럼 통계 계산 중 오류가 발생했습니다.")
+            st.exception(e)
+            st.stop()
 
-            fig = go.Figure()
-            # Real 범위
-            fig.add_trace(go.Scatter(x=freqs, y=max_real, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
-            fig.add_trace(go.Scatter(x=freqs, y=min_real, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 0, 255, 0.1)', name='Real 범위', showlegend=False, hoverinfo='skip'))
-            # Fake 범위
-            fig.add_trace(go.Scatter(x=freqs, y=max_fake, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
-            fig.add_trace(go.Scatter(x=freqs, y=min_fake, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.1)', name='Fake 범위', showlegend=False, hoverinfo='skip'))
-            # 평균 선
-            fig.add_trace(go.Scatter(x=freqs, y=mean_real, mode='lines', name='실제 음성', line=dict(color='blue', width=2)))
-            fig.add_trace(go.Scatter(x=freqs, y=mean_fake, mode='lines', name='딥보이스', line=dict(color='red', width=2)))
-            # 임계치
-            threshold_hz = 11025
+        # -----------------------------
+        # 2) Plotly 안전화: 길이/NaN/inf 방어
+        # -----------------------------
+        def _v(x):
+            return np.asarray(x).reshape(-1)
+
+        freqs = _v(freqs)
+        mean_real, min_real, max_real = _v(mean_real), _v(min_real), _v(max_real)
+        mean_fake, min_fake, max_fake = _v(mean_fake), _v(min_fake), _v(max_fake)
+
+        L = min(len(freqs), len(mean_real), len(min_real), len(max_real),
+                len(mean_fake), len(min_fake), len(max_fake))
+
+        if L <= 1:
+            st.warning("유효한 스펙트럼 길이가 너무 짧아 차트를 표시할 수 없습니다.")
+            st.stop()
+
+        freqs = freqs[:L]
+        mean_real, min_real, max_real = mean_real[:L], min_real[:L], max_real[:L]
+        mean_fake, min_fake, max_fake = mean_fake[:L], min_fake[:L], max_fake[:L]
+
+        mask = (
+            np.isfinite(freqs) &
+            np.isfinite(mean_real) & np.isfinite(min_real) & np.isfinite(max_real) &
+            np.isfinite(mean_fake) & np.isfinite(min_fake) & np.isfinite(max_fake)
+        )
+
+        freqs = freqs[mask]
+        mean_real, min_real, max_real = mean_real[mask], min_real[mask], max_real[mask]
+        mean_fake, min_fake, max_fake = mean_fake[mask], min_fake[mask], max_fake[mask]
+
+        if len(freqs) == 0:
+            st.warning("유효한 스펙트럼 값이 없어 차트를 표시할 수 없습니다.")
+            st.stop()
+
+        # y축 범위 자동(기본 -80~0 유지하되 데이터가 벗어나면 따라가게)
+        ymin = float(np.nanmin([min_real.min(), min_fake.min(), mean_real.min(), mean_fake.min()]))
+        ymax = float(np.nanmax([max_real.max(), max_fake.max(), mean_real.max(), mean_fake.max()]))
+
+        if not np.isfinite(ymin): ymin = -80.0
+        if not np.isfinite(ymax): ymax = 0.0
+
+        ymin = min(ymin, -80.0)
+        ymax = max(ymax, 0.0)
+
+        # x축 범위도 데이터 기반으로 (기존 0~22050 유지하되 freqs가 더 작으면 맞춤)
+        x_max = float(np.nanmax(freqs)) if len(freqs) else 22050.0
+        if not np.isfinite(x_max) or x_max <= 0:
+            x_max = 22050.0
+        x_max = max(x_max, 1000.0)
+
+        # -----------------------------
+        # 3) Plotly 시각화 (기존 로직 유지)
+        # -----------------------------
+        fig = go.Figure()
+
+        # Real 범위
+        fig.add_trace(go.Scatter(
+            x=freqs, y=max_real, mode="lines",
+            line=dict(width=0), showlegend=False, hoverinfo="skip"
+        ))
+        fig.add_trace(go.Scatter(
+            x=freqs, y=min_real, mode="lines",
+            line=dict(width=0), fill="tonexty",
+            fillcolor="rgba(0, 0, 255, 0.1)",
+            name="Real 범위", showlegend=False, hoverinfo="skip"
+        ))
+
+        # Fake 범위
+        fig.add_trace(go.Scatter(
+            x=freqs, y=max_fake, mode="lines",
+            line=dict(width=0), showlegend=False, hoverinfo="skip"
+        ))
+        fig.add_trace(go.Scatter(
+            x=freqs, y=min_fake, mode="lines",
+            line=dict(width=0), fill="tonexty",
+            fillcolor="rgba(255, 0, 0, 0.1)",
+            name="Fake 범위", showlegend=False, hoverinfo="skip"
+        ))
+
+        # 평균 선
+        fig.add_trace(go.Scatter(
+            x=freqs, y=mean_real, mode="lines",
+            name="실제 음성", line=dict(color="blue", width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=freqs, y=mean_fake, mode="lines",
+            name="딥보이스", line=dict(color="red", width=2)
+        ))
+
+        # 임계치
+        threshold_hz = 11025
+        # 데이터 x 범위 안에서만 표시(범위 밖이면 맨 오른쪽에 박혀 보이는 문제 방지)
+        if threshold_hz <= x_max:
             fig.add_vline(x=threshold_hz, line_width=2, line_dash="dash", line_color="green")
+            ann_x = threshold_hz
+        else:
+            ann_x = x_max * 0.9  # 표시 위치 보정(임계치가 범위 밖일 때)
+        fig.update_layout(
+            title="<b>주파수별 에너지 분포</b>",
+            xaxis_title="주파수 (Hz)",
+            yaxis_title="에너지 (dB)",
+            template="plotly_white",
+            height=450,
+            xaxis=dict(range=[0, x_max]),
+            yaxis=dict(range=[ymin, ymax]),
+            legend=dict(x=0.8, y=0.95),
+            hovermode="x unified",
+            margin=dict(l=20, r=20, t=60, b=20),
+            annotations=[
+                dict(
+                    x=ann_x, y=(ymax - (ymax - ymin) * 0.15),
+                    xref="x", yref="y",
+                    text="임계치 (11kHz)" if threshold_hz <= x_max else "임계치(11kHz, 범위 밖)",
+                    showarrow=True, arrowhead=1, ax=40, ay=-40,
+                    font=dict(color="green", size=12)
+                )
+            ]
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
             
-            fig.update_layout(
-                title="<b>주파수별 에너지 분포</b>",
-                xaxis_title="주파수 (Hz)", yaxis_title="에너지 (dB)", template="plotly_white", height=450,
-                xaxis=dict(range=[0, 22050]), yaxis=dict(range=[-80, 0]), legend=dict(x=0.8, y=0.95),
-                annotations=[dict(x=threshold_hz, y=-10, xref="x", yref="y", text="임계치 (11kHz)", showarrow=True, arrowhead=1, ax=40, ay=-40, font=dict(color="green", size=12))]
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.info(f"""
-            ### 주파수 스펙트럼 해석
-            **1. 나이퀴스트 정리(Nyquist Theorem)와 '11kHz의 비밀'**
-            * **원리:** 디지털 신호는 샘플링 속도의 **절반(1/2)**까지만 주파수를 표현할 수 있습니다.
-            * **증거:** 이 파일은 48,000Hz 형식이지만, **딥보이스는 약 11,025Hz에서 에너지가 사라집니다.** 이는 **저화질(22kHz) AI 생성물**을 파일 형식만 고음질로 강제 변환했다는 증거입니다.
-            
-            **2. 🔵 실제 음성 vs 🔴 딥보이스**
-            * **정상:** 16kHz 이상 초고주파 대역까지 에너지가 살아있고, 미세한 노이즈(Range 두께)가 관찰됩니다.
-            * **딥보이스:** 임계치 이후 에너지가 무음 범위인 -80dB로 떨어지며, 인위적으로 깨끗한 직선을 그립니다.
-            """)
+        st.info(f"""
+        ### 주파수 스펙트럼 해석
+        **1. 나이퀴스트 정리(Nyquist Theorem)와 '11kHz의 비밀'**
+        * **원리:** 디지털 신호는 샘플링 속도의 **절반(1/2)**까지만 주파수를 표현할 수 있습니다.
+        * **증거:** 이 파일은 48,000Hz 형식이지만, **딥보이스는 약 11,025Hz에서 에너지가 사라집니다.** 이는 **저화질(22kHz) AI 생성물**을 파일 형식만 고음질로 강제 변환했다는 증거입니다.
+        
+        **2. 🔵 실제 음성 vs 🔴 딥보이스**
+        * **정상:** 16kHz 이상 초고주파 대역까지 에너지가 살아있고, 미세한 노이즈(Range 두께)가 관찰됩니다.
+        * **딥보이스:** 임계치 이후 에너지가 무음 범위인 -80dB로 떨어지며, 인위적으로 깨끗한 직선을 그립니다.
+        """)
 
     st.markdown("---") 
     st.header("유형별 범죄 흐름")
