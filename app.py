@@ -312,7 +312,7 @@ with tab1:
         )
 
         layer_bar_group = bars + text_loan + text_imperson
-        layer_line_group = lines + line_text 
+        layer_line_group = lines + line_text + rule + text_top
         
         combined = alt.layer(
             layer_bar_group, 
