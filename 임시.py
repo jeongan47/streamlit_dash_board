@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 # ✅ [추가] 오디오 분석용 라이브러리
 import librosa
+import graphviz
 import matplotlib.pyplot as plt
 import altair as alt
 import os, glob
@@ -45,6 +46,17 @@ def fmt_jo_eok(x):
     if jo > 0: return f"{jo}조 {rem:,}억"
     return f"{rem:,}억"
 
+def load_crime_data(filename, key_suffix):
+    df = load_or_upload(filename, f"u_{key_suffix}")
+    if not df.empty and '연도' in df.columns:
+        # 연도를 인덱스로 설정하고 숫자형으로 변환
+        df = df.set_index('연도')
+        # 혹시 모를 쉼표(,) 제거 및 숫자 변환
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].str.replace(',', '').astype(float)
+    return df
+
 # -----------------------------
 # 2. 데이터 로드
 # -----------------------------
@@ -58,7 +70,9 @@ types_only = load_or_upload("types_only.csv", "u_types")
 age = load_or_upload("age2.csv", "u_age")
 data_2025 = load_or_upload("25년(11월).csv", "u_25") 
 leak_df = load_or_upload("역대유출사고.csv", "u_leak")
-
+df_occur = load_crime_data("발생건수.csv", "occur")
+df_arrest = load_crime_data("검거건수.csv", "arrest")
+df_rate = load_crime_data("검거율.csv", "rate")
 
 # [신규] 비정상 흐름 분석 데이터 로드
 st.sidebar.markdown("---")
@@ -211,8 +225,8 @@ with tab1:
     # [수정] 5번째 컬럼 제거 및 4개 비율 재조정 (1:1:1.2:1.5)
     k1, k2, k3, k4 = st.columns([1, 1, 1.2, 1.5])
     
-    k1.metric("총 발생건수", f"{total_cases_all:,.0f}건")
-    k2.metric("총 피해액", fmt_jo_eok(total_loss_all))
+    k1.metric("총 발생건수 (16~25)", f"{total_cases_all:,.0f}건")
+    k2.metric("총 피해액 (16~25)", fmt_jo_eok(total_loss_all))
     k3.metric("2025년 건당 피해액", fmt_man_unit(lpc_2025_val))
     k4.metric("딥보이스 확산 영향도 (23→25)", f"{diff_amount:+,.0f}억원 ({diff_pct:+.1f}%)", delta="2023년 대비 증가", delta_color="inverse")
 
@@ -312,7 +326,7 @@ with tab1:
         )
 
         layer_bar_group = bars + text_loan + text_imperson
-        layer_line_group = lines + line_text 
+        layer_line_group = lines + line_text + rule + text_top 
         
         combined = alt.layer(
             layer_bar_group, 
@@ -353,20 +367,20 @@ with tab1:
                 rate_sev_25 = ((data_25['Loss_Per_Case_Man'] - sev_23) / sev_23) * 100
                 analysis_msg.append(f"""
                 * **2025년 (고착화기):** 23년 대비 피해 규모는 **{rate_scale_25:+.1f}%**, 
-                    건당 피해액은 **{rate_sev_25:+.1f}%** 까지 폭등하며 
-                    점차 정교하고 고도화된 양상입니다.
+                    건당 피해액은 **{rate_sev_25:+.1f}%** 까지 치솟았습니다. 
+                    이제 딥보이스 피싱은 일시적 현상이 아닌 **구조적인 위협**으로 고착화되었습니다.
                 """)
 
             if analysis_msg:
                 final_text = "\n".join(analysis_msg)
                 st.info(f"""
-                **딥보이스 상용화(2023) 이후 범죄 가속화 양상**
+                **📊 딥보이스 상용화(2023) 이후 범죄 가속화 양상**
                 
                 기술 상용화 원년인 2023년을 기준으로, 이후의 변화는 다음과 같습니다.
                 {final_text}
-                """)
+                """, icon="📈")
             else:
-                st.info("2023년 딥보이스 상용화 이후, 기술 고도화에 따른 추적 관찰이 필요합니다.")
+                st.info("📊 2023년 딥보이스 상용화 이후, 기술 고도화에 따른 추적 관찰이 필요합니다.", icon="🔎")
 
         except IndexError:
             st.error("데이터에서 2023년 기준 정보를 찾을 수 없습니다.")
@@ -491,509 +505,228 @@ with tab2:
 
             with col_trend:
                 st.markdown("##### 연령대별 피해 추이 (Trend)")
-
                 age_line = alt.Chart(age_long_f).mark_line(point=True).encode(
                     x=alt.X("Year:O", title="연도"),
                     y=alt.Y("Victims:Q", title="피해자 수(명)"),
                     color=alt.Color("AgeGroup:N", legend=alt.Legend(title="연령대")),
                     tooltip=["Year", "AgeGroup", alt.Tooltip("Victims", format=",", title="피해자 수")]
                 ).properties(height=450)
-
+                # 2025년 강조 룰
                 rule = alt.Chart(pd.DataFrame({'Year': [2025]})).mark_rule(color='red', strokeDash=[4,4]).encode(x='Year:O')
-
+                
                 st.altair_chart(age_line + rule, use_container_width=True)
-
-                # ✅ 여기부터: "그래프 밑"에 고정 배치되는 INFO
-                y_df = age_long_f[age_long_f["Year"] == target_year_age].copy()
-                total_v = float(y_df["Victims"].sum()) if not y_df.empty else 0.0
-
-                def _pct(x, total): 
-                    return (x / total * 100.0) if total > 0 else 0.0
-
-                if not y_df.empty and total_v > 0:
-                    y_df = y_df.sort_values("Victims", ascending=False)
-                    top1 = y_df.iloc[0]
-                    top1_name = str(top1["AgeGroup"])
-                    top1_v = float(top1["Victims"])
-                    top1_pct = _pct(top1_v, total_v)
-
-                    # 청년층(20대이하+30대)
-                    youth_groups = [g for g in ["20대이하", "30대"] if g in y_df["AgeGroup"].unique()]
-                    youth_v = float(y_df[y_df["AgeGroup"].isin(youth_groups)]["Victims"].sum()) if youth_groups else 0.0
-                    youth_pct = _pct(youth_v, total_v)
-
-                    st.info(
-                        f"""
-            **({target_year_age}년 피해현황)**  
-            - 최다 연령대: **{top1_name}** — **{top1_v:,.0f}명 ({top1_pct:.1f}%)**
-            {"- 청년층(20대이하+30대): **" + f"{youth_v:,.0f}명 ({youth_pct:.1f}%)**" if youth_groups else ""}
-
-            **신종 수법과 20대 타겟팅**  
-            - ** 기관사칭 -> 범죄연루**로 협박·압박
-            - **‘안전폰’/악성앱 유도 → 원격제어·화면감시·번호조작**으로 통제  
-            - 가족·지인과 **연락 차단** 및 숙박업소 이동 등으로 **고립(셀프 감금)** 유도  
-            - 청년층은 **비대면 금융/앱 설치/가상자산 구매**에 익숙해 ‘전환 순간’ 피해가 늘고 있음
-            """
-                    )
-                else:
-                    st.info("선택 연도의 연령대별 피해 데이터가 없어 인사이트를 생성할 수 없습니다.")
-
         else:
             st.error("연령대 데이터 컬럼을 찾을 수 없습니다.")
     else:
         st.warning("연령별 데이터(age.csv)가 로드되지 않았습니다.")
-
-        
 # ==============================================================================
 # TAB 3: 월별 추이 & 이슈
 # ==============================================================================
-def load_grouped_crime_file(filename: str, key_suffix: str = "crime_grouped"):
-    crime_long = load_or_upload(filename, f"u_{key_suffix}")
-    if crime_long is None or crime_long.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    crime_long = crime_long.copy()
-    crime_long.columns = crime_long.columns.astype(str).str.strip()
-
-    # 필수 컬럼 자동 매핑(이름이 조금 달라도 대응)
-    col_year = "연도" if "연도" in crime_long.columns else ("Year" if "Year" in crime_long.columns else None)
-    col_key  = "범죄대분류" if "범죄대분류" in crime_long.columns else (crime_long.columns[1] if crime_long.shape[1] >= 2 else None)
-
-    # 값 컬럼 후보
-    c_occ = "발생건수_합" if "발생건수_합" in crime_long.columns else ("발생건수" if "발생건수" in crime_long.columns else None)
-    c_arr = "검거건수_합" if "검거건수_합" in crime_long.columns else ("검거건수" if "검거건수" in crime_long.columns else None)
-    c_per = "검거인원_합" if "검거인원_합" in crime_long.columns else ("검거인원" if "검거인원" in crime_long.columns else None)
-
-    if col_year is None or col_key is None or c_occ is None or c_arr is None or c_per is None:
-        st.error("검거데이터.csv의 컬럼명이 예상과 다릅니다. (연도/범죄대분류/발생/검거/검거인원 컬럼 확인)")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    # 숫자 정리
-    for c in [c_occ, c_arr, c_per]:
-        if crime_long[c].dtype == "object":
-            crime_long[c] = crime_long[c].astype(str).str.replace(",", "", regex=False).str.strip()
-        crime_long[c] = pd.to_numeric(crime_long[c], errors="coerce").fillna(0)
-
-    crime_long[col_year] = pd.to_numeric(crime_long[col_year], errors="coerce").astype("Int64")
-
-    # pivot
-    df_occur  = crime_long.pivot_table(index=col_year, columns=col_key, values=c_occ, aggfunc="sum").sort_index()
-    df_case   = crime_long.pivot_table(index=col_year, columns=col_key, values=c_arr, aggfunc="sum").sort_index()
-    df_person = crime_long.pivot_table(index=col_year, columns=col_key, values=c_per, aggfunc="sum").sort_index()
-
-    # rate
-    df_rate = (df_case / df_occur.replace(0, np.nan)) * 100
-    df_rate = df_rate.replace([np.inf, -np.inf], np.nan).fillna(0)
-
-    # index 정수화
-    df_occur.index  = pd.to_numeric(df_occur.index, errors="coerce")
-    df_case.index   = pd.to_numeric(df_case.index, errors="coerce")
-    df_person.index = pd.to_numeric(df_person.index, errors="coerce")
-    df_rate.index   = pd.to_numeric(df_rate.index, errors="coerce")
-
-    return df_occur, df_case, df_person, df_rate
-
-
-# ==============================================================================
-# (1) 앱 로드시: annual은 이미 로드되어 있다고 했으니 유지
-#     annual = load_or_upload("annual.csv","u_annual")
-#     이제 검거데이터.csv를 로드해서 df_occur/df_case/df_person/df_rate를 구성
-# ==============================================================================
-df_occur, df_case, df_person, df_rate = load_grouped_crime_file("검거데이터.csv", "crime_grouped")
-
-
-# ==============================================================================
-# (2) Tab3 구현 (네 로직 유지 + 로드된 변수에 맞게 '정상 동작'하도록 정리)
-# ==============================================================================
 with tab3:
-    import plotly.graph_objects as go
-
-    # --------------------------------------------------------------------------
-    # [A] 2025년 '전체' 건당 피해액(원) -> 예방가치(사회적 비용 1.5배) 계산
-    # --------------------------------------------------------------------------
+    # ==============================================================================
+    # [1] 데이터 전처리 & KPI 계산
+    # ==============================================================================
     target_years = [2024, 2025]
-    avg_loss_per_case = 25_000_000  # fallback(원)
-
-    if 'annual' in locals() and annual is not None and not annual.empty:
-        df_calc = annual[(annual["Type"] == "전체") & (annual["Year"].isin(target_years))].copy()
+    avg_loss_per_case = 25000000 
+    
+    if 'annual' in locals() and not annual.empty:
+        df_calc = annual[(annual["Type"]=="전체") & (annual["Year"].isin(target_years))].copy()
         if not df_calc.empty:
-            sum_loss = pd.to_numeric(df_calc["Loss_Eok"], errors="coerce").fillna(0).sum() * 100_000_000
-            sum_cases = pd.to_numeric(df_calc["Cases"], errors="coerce").fillna(0).sum()
+            sum_loss = df_calc["Loss_Eok"].sum() * 100000000 
+            sum_cases = df_calc["Cases"].sum()
             if sum_cases > 0:
                 avg_loss_per_case = sum_loss / sum_cases
 
-    social_cost_factor = 1.5
-    unit_prevent_value = avg_loss_per_case * social_cost_factor  # 원
+    social_cost_factor = 1.5 
+    unit_prevent_value = avg_loss_per_case * social_cost_factor
 
-    # KPI의 "총 발생/총 검거/미검거"는 검거데이터(df_occur/df_case)에서 산출
-    HIGHLIGHT_CRIME = "지능범죄"
+    total_occur = 0
+    total_arrest = 0
+    total_gap = 0
+    avg_arrest_rate = 0.0
+    df_arr = pd.DataFrame()
 
-    def safe_series(s: pd.Series) -> pd.Series:
-        s = pd.to_numeric(s, errors="coerce")
-        s = s.replace([np.inf, -np.inf], np.nan).fillna(0)
-        return s
+    source_df = annual_f if 'annual_f' in locals() and not annual_f.empty else annual
+    
+    if not source_df.empty:
+        if 'Arrest_Cases' not in source_df.columns and '검거건수' in source_df.columns:
+            source_df = source_df.rename(columns={'검거건수': 'Arrest_Cases'})
+        if 'Cases' not in source_df.columns and '발생건수' in source_df.columns:
+            source_df = source_df.rename(columns={'발생건수': 'Cases'})
 
-    def years_from_index(df):
-        ys = [int(y) for y in df.index if str(y).isdigit()]
-        return sorted(ys)
-
-
-    # --------------------------------------------------------------------------
-    # [C] ax1/ax2/ax3 (네 로직 그대로)
-    # --------------------------------------------------------------------------
-    HIGHLIGHT_CRIME = "지능범죄"
-
-    def safe_series(s: pd.Series) -> pd.Series:
-        s = pd.to_numeric(s, errors="coerce")
-        s = s.replace([np.inf, -np.inf], np.nan).fillna(0)
-        return s
-
-    def years_from_index(df):
-        ys = []
-        for y in df.index:
-            try:
-                ys.append(int(y))
-            except:
-                pass
-        return sorted(list(set(ys)))
-
-    # ------------------------------------------------------------------------------
-    # 제목
-    # ------------------------------------------------------------------------------
-    st.subheader("사후검거의 괴리율 + 검거율/미검거 순위")
-    st.caption("기간: 2016~2024(결측사유로 17년 제외)")
-
-    # ------------------------------------------------------------------------------
-    # 0) 유효성 체크
-    # ------------------------------------------------------------------------------
-    if df_occur is None or df_case is None or df_occur.empty or df_case.empty:
-        st.warning("차트를 표시할 데이터가 부족합니다. (발생건수/검거건수 로드 확인)")
-    else:
-        common_types = sorted(list(set(df_occur.columns) & set(df_case.columns)))
-        if not common_types:
-            st.error("발생건수(df_occur)와 검거건수(df_case) 사이에 공통 범죄유형 컬럼이 없습니다.")
-        else:
-            # 고정 기간
-            y0, y1 = 2016, 2024
-            years = years_from_index(df_occur) or years_from_index(df_case)
-            years = [y for y in years if y0 <= y <= y1]
-            if not years:
-                st.error("2016~2024 구간 데이터가 없습니다. (연도 인덱스 확인)")
+        if "Arrest_Cases" in source_df.columns:
+            if 'Type' in source_df.columns:
+                df_arr = source_df[(source_df["Type"] == "전체") & (source_df["Year"] < 2025)].copy()
             else:
-                # ------------------------------------------------------------------------------
-                # UI: 상단 Loss Area에서 볼 범죄 선택
-                # ------------------------------------------------------------------------------
-                default_sel = [HIGHLIGHT_CRIME] if HIGHLIGHT_CRIME in common_types else [common_types[0]]
-                selected_types = st.multiselect(
-                    "범죄별 검거 양상 선택 (여러 개 가능)",
-                    options=common_types,
-                    default=default_sel,
-                )
-
-                # ==============================================================================
-                # (A) 상단: Loss Area (ax1)  --- '현재 ax3 자리(위쪽)'로 배치
-                # ==============================================================================
-                if selected_types:
-                    for crime in selected_types:
-                        s_cases = safe_series(df_occur[crime]).copy()
-                        s_arrest = safe_series(df_case[crime]).copy()
-
-                        s_cases.index = pd.to_numeric(s_cases.index, errors="coerce")
-                        s_arrest.index = pd.to_numeric(s_arrest.index, errors="coerce")
-
-                        idx = sorted(set(s_cases.index.dropna().astype(int)) & set(s_arrest.index.dropna().astype(int)))
-                        idx = [y for y in idx if y0 <= y <= y1]
-                        if not idx:
-                            st.warning(f"[{crime}] 2016~2024 범위 데이터가 없습니다.")
-                            continue
-
-                        df_arr = pd.DataFrame({
-                            "Year": idx,
-                            "Cases": [float(s_cases.loc[y]) for y in idx],
-                            "Arrest_Cases": [float(s_arrest.loc[y]) for y in idx],
-                        })
-                        df_arr["gap"] = df_arr["Cases"] - df_arr["Arrest_Cases"]
-
-                        is_highlight = (crime == HIGHLIGHT_CRIME)
-                        red = "#FF5252" if is_highlight else "#90A4AE"
-                        blue = "#448AFF" if is_highlight else "#B0BEC5"
-                        fill_rgba = "rgba(255,82,82,0.2)" if is_highlight else "rgba(144,164,174,0.18)"
-
-                        fig_loss = go.Figure()
-
-                        # 검거(Blue)
-                        fig_loss.add_trace(go.Scatter(
-                            x=df_arr["Year"], y=df_arr["Arrest_Cases"],
-                            name="검거(대응)", mode="lines",
-                            line=dict(color=blue, width=2),
-                            hovertemplate="%{x}년 검거: %{y:,.0f}건<extra></extra>",
-                        ))
-
-                        # 발생>검거 구간만 채우기
-                        y_fill = [c if c > a else a for c, a in zip(df_arr["Cases"], df_arr["Arrest_Cases"])]
-                        fig_loss.add_trace(go.Scatter(
-                            x=df_arr["Year"], y=y_fill,
-                            mode="lines", line=dict(width=0),
-                            fill="tonexty", fillcolor=fill_rgba,
-                            showlegend=False, hoverinfo="skip",
-                        ))
-
-                        # 발생(Red)
-                        fig_loss.add_trace(go.Scatter(
-                            x=df_arr["Year"], y=df_arr["Cases"],
-                            name="발생", mode="lines+markers",
-                            line=dict(color=red, width=4),
-                            marker=dict(size=6, color=red),
-                            hovertemplate="%{x}년 발생: %{y:,.0f}건<extra></extra>",
-                        ))
-
-                        # 간단 해석값
-                        total_gap = float(df_arr["gap"].clip(lower=0).sum())
-                        max_gap = float(df_arr["gap"].max())
-                        max_gap_year = int(df_arr.loc[df_arr["gap"].idxmax(), "Year"])
-
-                        fig_loss.update_layout(
-                            title=f"<b>{crime} : 발생 초과 구간(2016~2024)</b>",
-                            xaxis_title="연도",
-                            yaxis_title="건수(건)",
-                            legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"),
-                            height=420,
-                            template="plotly_white",
-                            hovermode="x unified",
-                            margin=dict(l=20, r=20, t=70, b=20),
-                        )
-                        st.plotly_chart(fig_loss, use_container_width=True)
-
-                        st.error(
-                            f"""
-                            **{crime} 차트해석**
-                            - **붉은 영역:** {total_gap:,.0f}건 (2016~2024 발생 초과 누적)
-                            - **미검거 최다 발생 연도:** {max_gap_year}년 (발생이 검거보다 {max_gap:,.0f}건 많음)
-                            - 항상 대응이 발생을 뒤쫓는 양상을 나타내어 예방/차단의 중요도가 커지고 있음
-                            """
-                        )
-                else:
-                    st.info("검거 양상을 표시할 범죄를 선택하세요.")
-
-            st.markdown("---")
-
-            # ==============================================================================
-            # (B) 하단: 좌(검거율 랭킹) / 우(미검거건수 순위)
-            # ==============================================================================
-            left, right = st.columns(2)
-
-            # ------------------------------
-            # 공통 집계(2016~2024)
-            # ------------------------------
-            rows_rate = []
-            rows_gap = []
-
-            for crime in common_types:
-                s_occ = safe_series(df_occur[crime]).copy()
-                s_arr = safe_series(df_case[crime]).copy()
-
-                s_occ.index = pd.to_numeric(s_occ.index, errors="coerce")
-                s_arr.index = pd.to_numeric(s_arr.index, errors="coerce")
-
-                idx = sorted(set(s_occ.index.dropna().astype(int)) & set(s_arr.index.dropna().astype(int)))
-                idx = [y for y in idx if y0 <= y <= y1]
-                if not idx:
-                    continue
-
-                # 합산 기반 검거율(권장): (기간 검거합 / 기간 발생합)*100
-                occ_sum = float(s_occ.loc[idx].sum())
-                arr_sum = float(s_arr.loc[idx].sum())
-                rate_sum = (arr_sum / occ_sum * 100.0) if occ_sum > 0 else np.nan
-
-                # 미검거건수(기간 합산): 발생-검거
-                gap_sum = occ_sum - arr_sum
-
-                if not np.isnan(rate_sum):
-                    rows_rate.append((crime, rate_sum))
-                rows_gap.append((crime, gap_sum))
-
-            df_rate_rank = pd.DataFrame(rows_rate, columns=["범죄유형", "검거율(%)"])
-            df_gap_rank = pd.DataFrame(rows_gap, columns=["범죄유형", "미검거건수"])
-
-            # ------------------------------
-            # (좌) 검거율 랭킹
-            # ------------------------------
-            with left:
-                st.markdown("#### 검거율 순위 (합산 기준)")
-                if df_rate_rank.empty:
-                    st.warning("검거율 랭킹을 계산할 데이터가 부족합니다.")
-                else:
-                    # 낮은 검거율이 더 위험 → 낮은 순으로 위에 나오게 ascending=True + hbar
-                    df_rate_rank = df_rate_rank.sort_values("검거율(%)", ascending=True)
-
-                    is_hi = df_rate_rank["범죄유형"].astype(str).str.contains(HIGHLIGHT_CRIME, na=False)
-                    colors = ["#D32F2F" if b else "#B0BEC5" for b in is_hi]
-                    opacity_vals = [1.0 if b else 0.55 for b in is_hi]
-
-                    fig_rate = go.Figure()
-                    fig_rate.add_trace(go.Bar(
-                        x=df_rate_rank["검거율(%)"],
-                        y=df_rate_rank["범죄유형"],
-                        orientation="h",
-                        marker=dict(color=colors, opacity=opacity_vals),
-                        text=df_rate_rank["검거율(%)"].round(1),
-                        texttemplate="%{text:.1f}%",
-                        textposition="outside",
-                        hovertemplate="<b>%{y}</b><br>검거율: %{x:.1f}%<extra></extra>",
-                    ))
-                    fig_rate.update_layout(
-                        height=520,
-                        template="plotly_white",
-                        xaxis=dict(title="검거율 (%)", rangemode="tozero"),
-                        margin=dict(l=10, r=10, t=20, b=20),
-                    )
-                    st.plotly_chart(fig_rate, use_container_width=True)
-
-            # ------------------------------
-            # (우) 미검거건수 순위
-            # ------------------------------
-    with right:
-        st.markdown("#### 미검거건수(합산 기준")
-
-        if df_gap_rank.empty:
-            st.warning("미검거건수 순위를 계산할 데이터가 부족합니다.")
-        else:
-            # ✅ 내림차순 정렬 (큰 값이 위로)
-            df_gap_rank = df_gap_rank.sort_values("미검거건수", ascending=False)
-
-            is_hi2 = df_gap_rank["범죄유형"].astype(str).str.contains(HIGHLIGHT_CRIME, na=False)
-            colors2 = ["#D32F2F" if b else "#B0BEC5" for b in is_hi2]
-            opacity2 = [1.0 if b else 0.55 for b in is_hi2]
-
-            fig_gap = go.Figure()
-            fig_gap.add_trace(go.Bar(
-                x=df_gap_rank["미검거건수"],
-                y=df_gap_rank["범죄유형"],
-                orientation="h",
-                marker=dict(color=colors2, opacity=opacity2),
-                text=df_gap_rank["미검거건수"].round(0).astype(int).map(lambda v: f"{v:,}"),
-                textposition="outside",
-                hovertemplate="<b>%{y}</b><br>미검거: %{x:,.0f}건<extra></extra>",
-            ))
-
-            # ✅ 내림차순인데도 '큰 값이 위'로 보이게 y축을 뒤집음(Plotly hbar 특성)
-            fig_gap.update_layout(
-                height=520,
-                template="plotly_white",
-                xaxis=dict(title="미검거 건수 (건)", rangemode="tozero"),
-                yaxis=dict(autorange="reversed"),
-                margin=dict(l=10, r=10, t=20, b=20),
-            )
-            st.plotly_chart(fig_gap, use_container_width=True)
-# ----------- ROI-------------------------------------
-    if "전체" in annual["Type"].values:
-        df_total = annual[annual["Type"] == "전체"].copy()
-    else:
-        df_total = annual.groupby("Year", as_index=False)[["Cases", "Loss_Eok"]].sum()
-        df_total["Type"] = "전체"
-
-    # 숫자형 정리(안전)
-    df_total["Year"] = pd.to_numeric(df_total["Year"], errors="coerce")
-    df_total["Cases"] = pd.to_numeric(df_total["Cases"], errors="coerce").fillna(0)
-    df_total["Loss_Eok"] = pd.to_numeric(df_total["Loss_Eok"], errors="coerce").fillna(0)
-
-    # 1) Loss_Per_Case_Man 계산 (k3와 동일: 만원 단위)
-    #    - Loss_Eok(억원) * 10000 = 만원
-    df_total["Loss_Per_Case_Man"] = df_total.apply(
-        lambda x: (x["Loss_Eok"] * 10000) / x["Cases"] if x["Cases"] > 0 else 0,
-        axis=1
-    )
-
-    # 2) 2025년 건당 피해액(만원) 추출 (k3와 동일)
-    row_2025 = df_total[df_total["Year"] == 2025]
-    lpc_2025_val = float(row_2025["Loss_Per_Case_Man"].values[0]) if not row_2025.empty else 0.0
-
-    # 3) ROI 시뮬레이터에서 필요한 값(원)으로 변환
-    #    - lpc_2025_val: 만원
-    #    - 원 = 만원 * 10,000
-    avg_loss_per_case_2025_won = lpc_2025_val * 10_000
-
-    # 4) 사회적 비용 계수 적용
-    social_cost_factor = 1.5
-    unit_prevent_value_2025_won = avg_loss_per_case_2025_won * social_cost_factor
+                df_arr = source_df[source_df["Year"] < 2025].copy()
+                
+            df_arr = df_arr.sort_values("Year")
+            
+            if not df_arr.empty:
+                total_occur = df_arr["Cases"].sum()
+                total_arrest = df_arr["Arrest_Cases"].sum()
+                total_gap = total_occur - total_arrest
+                if total_occur > 0:
+                    avg_arrest_rate = (total_arrest / total_occur) * 100
 
     # ==============================================================================
-    # ROI Simulator UI
+    # [2] 상단 KPI
     # ==============================================================================
+    st.markdown("### '3년 늦은 정의': 물리적 대응의 한계")
+    
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: st.metric("총 발생 (누적)", f"{total_occur:,.0f} 건")
+    with k2: st.metric("총 검거 (누적)", f"{total_arrest:,.0f} 건", delta=f"{avg_arrest_rate:.1f}% (검거율)")
+    with k3: st.metric("미검거 잔존", f"{total_gap:,.0f} 건", delta="-대응 시차 발생", delta_color="inverse")
+    with k4: st.metric("1건당 예방가치", f"{unit_prevent_value/10000:,.0f} 만원", delta="사회적 비용 포함")
+
     st.markdown("---")
-    st.subheader("기술의 기대가치")
 
+ # ==============================================================================
+    # [3] 중간 차트: 16~24년 평균 검거율 비교 (Rank)
+    # ==============================================================================
+    st.subheader("📊 범죄별 평균 검거율 비교 (2016~2024)")
+    st.caption("지난 9년간의 평균 데이터를 분석한 결과, **보이스피싱의 검거율**이 타 범죄 대비 현저히 낮음을 확인할 수 있습니다.")
+
+    if 'df_rate' in locals() and not df_rate.empty:
+        import plotly.graph_objects as go
+        
+        # 1. 데이터 가공 (평균 계산 및 정렬)
+        # 2016~2024년 데이터 필터링 (인덱스가 연도인 경우)
+        target_df = df_rate.loc[2016:2024]
+        
+        # 컬럼별 평균 계산
+        avg_rates = target_df.mean()
+        
+        # 정렬: Plotly 가로 막대는 리스트의 마지막 요소가 차트의 '맨 위'에 그려집니다.
+        # 따라서 '내림차순'으로 보이게 하려면 값을 '오름차순(Ascending)'으로 정렬해야 합니다.
+        avg_rates = avg_rates.sort_values(ascending=True)
+        
+        # 2. 색상 설정 ('보이스피싱'만 빨간색, 나머지는 회색)
+        colors = []
+        opacity_vals = []
+        
+        for crime in avg_rates.index:
+            if crime == '보이스피싱':
+                colors.append('#D32F2F')  # 강조색 (빨강)
+                opacity_vals.append(1.0)  # 불투명
+            else:
+                colors.append('#B0BEC5')  # 기본색 (회색)
+                opacity_vals.append(0.6)  # 약간 투명하게
+        
+        # 3. 차트 그리기
+        fig_rank = go.Figure()
+
+        fig_rank.add_trace(go.Bar(
+            x=avg_rates.values,       # X축: 검거율
+            y=avg_rates.index,        # Y축: 범죄명
+            orientation='h',          # 가로 막대
+            marker=dict(color=colors, opacity=opacity_vals), # 색상 적용
+            text=avg_rates.values,
+            texttemplate='%{text:.1f}%', # 소수점 1자리
+            textposition='outside',   # 막대 끝에 숫자 표시
+            hovertemplate='<b>%{y}</b><br>평균 검거율: %{x:.1f}%<extra></extra>'
+        ))
+
+        # 4. 레이아웃 설정
+        fig_rank.update_layout(
+            title=dict(text="<b>[Warning] 보이스피싱 검거율 순위</b>", font=dict(size=16)),
+            xaxis=dict(
+                title="평균 검거율 (%)", 
+                range=[0, 115], # 텍스트 여백 확보
+                showgrid=True,
+                gridcolor='#eee'
+            ),
+            yaxis=dict(
+                title="",
+                tickfont=dict(size=12)
+            ),
+            height=600, # 항목이 많을 수 있으므로 높이 확보
+            template="plotly_white",
+            margin=dict(l=20, r=20, t=50, b=20),
+            showlegend=False
+        )
+        
+        # 보이스피싱 위치에 주석(Annotation) 추가
+        vp_rate = avg_rates.get('보이스피싱', 0)
+        if vp_rate > 0:
+            fig_rank.add_annotation(
+                x=vp_rate,
+                y='보이스피싱',
+                text="<b>📉 Lowest Efficiency</b>",
+                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2,
+                ax=60, ay=0,
+                bgcolor="white", bordercolor="#D32F2F", borderwidth=1,
+                font=dict(color="#D32F2F", size=11)
+            )
+
+        st.plotly_chart(fig_rank, use_container_width=True)
+
+        # 텍스트 인사이트
+        vp_rank = len(avg_rates) - list(avg_rates.index).index('보이스피싱') # 뒤에서부터 순위 계산
+        st.error(f"""
+        **🚨 분석 결과**
+        * **보이스피싱**의 9년 평균 검거율은 **{vp_rate:.1f}%**로, 전체 {len(avg_rates)}개 범죄 유형 중 **{vp_rank}위**를 기록했습니다.
+        * 이는 물리적 검거 방식이 비대면 범죄인 보이스피싱에는 효과적이지 않음을 증명합니다.
+        """)
+
+    else:
+        st.warning("데이터가 로드되지 않았습니다.")
+
+    # 3. [Simulator]
+    st.markdown("---")
+    st.subheader("우리 기술의 가치 시뮬레이션 (ROI)")
+    
     col_sim1, col_sim2 = st.columns([1, 2])
 
     with col_sim1:
         st.markdown("**예방 건수 설정**")
         detect_target = st.slider("월간 예상 탐지 건수", min_value=1, max_value=1000, value=100, step=10)
-        st.caption("2025년 건당 피해액 기준 산출")
-
+        st.caption(f"기준: 최근 {min(target_years)}~{max(target_years)}년 평균 피해액")
+        
         with st.expander("1.5배 산출 근거 (UK Home Office)"):
-            st.markdown(
-                """
-                **🇬🇧 영국 내무부 (2018 Report)**
-                - Cost of Crime Model: Financial Loss + Emotional Impact + CJS Costs
-                - 직접 피해액 대비 사회적 비용이 추가로 발생(수사/사법/정신적 피해 포함)
-                """
-            )
+            st.markdown("""
+            **🇬🇧 영국 내무부 (2018 Report)**
+            * **Page 15, Figure 2:** Cost of Crime Model
+            * **Total Cost** = Financial Loss + Emotional Impact + CJS Costs
+            * 위 공식에 따라 직접 피해액의 **약 1.5배~2배**가 실제 사회적 비용으로 산출됨.
+            """)
 
     with col_sim2:
-        # fixed_val(만원) 기준으로 ROI 전부 계산/표시 (로직 동일)
-        fixed_val = 5381  # ✅ 2025 건당 피해액(만원) 강제
-
-        # 1) 만원 → 원 변환
-        avg_loss_per_case_2025_won = fixed_val * 10_000
-
-        # 2) 사회적 비용 포함 1건당 예방가치(원)
-        unit_prevent_value_2025_won = avg_loss_per_case_2025_won * social_cost_factor
-
-        # 3) 월/연 절감(원)
-        monthly_saving = unit_prevent_value_2025_won * detect_target
+        monthly_saving = unit_prevent_value * detect_target
         yearly_saving = monthly_saving * 12
+        
+        st.markdown(f"#### 1건 탐지 시: :blue[{unit_prevent_value/10000:,.0f}만 원] 사회적 비용 절감")
+        st.caption(f"(직접 피해액 {avg_loss_per_case/10000:,.0f}만원 × 사회적 비용 계수 {social_cost_factor}배)")
+        
+        st.success(f"""
+        **영국 내무부 비용 모델 (The Cost of Crime Model) 적용**
+        
+        $$
+        \\text{{Total Benefit}} = \\text{{Financial Loss}} + \\text{{Emotional Impact}} + \\text{{CJS Costs}}
+        $$
+        
+        * **직접 피해 방어:** {avg_loss_per_case/10000:,.0f}만 원
+        * **사회적 비용 절감:** +{(unit_prevent_value - avg_loss_per_case)/10000:,.0f}만 원 (수사비용, 정신적 피해 등)
+        
+        **월 {detect_target}건 차단 시: 월 {monthly_saving/100000000:,.2f} 억원 경제 효과**
+        """)
 
-        # 4) 표시는 만원 단위로
-        unit_prevent_value_2025_man = unit_prevent_value_2025_won / 10_000  # 만원
-        social_extra_man = (unit_prevent_value_2025_won - avg_loss_per_case_2025_won) / 10_000  # 만원
-
-        st.markdown(f"#### 1건당 예방 시 :blue[{int(unit_prevent_value_2025_man) }만 원] 사회적 비용 절감")
-        st.caption(f"(2025 건당 피해액 {fixed_val:,}만원 × 사회적 비용 계수 {social_cost_factor}배)")
-
-        st.success(
-            f"""
-            **영국 내무부 비용 모델 (The Cost of Crime Model) 적용**
-
-            $$
-            \\text{{Total Benefit}} = \\text{{Financial Loss}} + \\text{{Emotional Impact}} + \\text{{CJS Costs}}
-            $$
-
-            - **직접 피해 방어:** {fixed_val:,}만 원
-            - **사회적 비용 절감:** +{social_extra_man:,.0f}만 원 (수사비용, 정신적 피해 등)
-
-            **월 {detect_target:,}건 차단 시: 월 {monthly_saving/100000000:,.2f} 억원 경제 효과**  
-            **연 {detect_target*12:,}건 차단 시: 연 {yearly_saving/100000000:,.2f} 억원 경제 효과**
-            """
-        )
-
-
-    st.info(
-        """
-        사후 조치는 피해금 회복이 제한적이지만,
-        **AI 탐지로 사전 차단은 피해액 자체를 온전히 보존**합니다.
-        따라서 단순 ‘범죄 예방’이 아니라 *개개인의 소중한 자산을 보호하는 솔루션**입니다.
-        """
-    )
-    # ==============================================================================
+    st.info("""
+    **Insight for Investors:**
+    경찰의 검거(사후 조치)는 피해금을 돌려받기 어렵지만, **AI의 탐지(사전 차단)는 피해액 전액(100%)을 보존**합니다.
+    이것이 우리가 단순한 '범죄 예방'을 넘어 **'금융 자산 보호 솔루션'**인 이유입니다.
+    """)
+# ==============================================================================
 # TAB 4: 딥보이스 vs 실제 음성 비교 (신규 생성)
 # ==============================================================================
 with tab4:
     # ##########################################################################
     # [SECTION A] 딥보이스 vs 실제 음성 주파수 분석
     # ##########################################################################
-    st.header("딥보이스 기술적 탐지 - 주파수 분석")
+    st.header("1️딥보이스 기술적 탐지 (주파수 분석)")
     st.markdown("""
-    **탐지 원리 및 차이:**
+    **탐지 원리 (High-Frequency Cutoff):**
     * **실제 음성:** 16kHz 이상의 고주파 대역까지 에너지가 자연스럽게 뻗어 있습니다.
     * **딥보이스:** 학습 데이터 한계로 **11kHz 부근에서 에너지가 뚝 끊기거나(Cut-off)** 사라집니다.
     """)
@@ -1046,14 +779,14 @@ with tab4:
             fig.add_trace(go.Scatter(x=freqs, y=max_fake, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
             fig.add_trace(go.Scatter(x=freqs, y=min_fake, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 0, 0, 0.1)', name='Fake 범위', showlegend=False, hoverinfo='skip'))
             # 평균 선
-            fig.add_trace(go.Scatter(x=freqs, y=mean_real, mode='lines', name='실제 음성', line=dict(color='blue', width=2)))
-            fig.add_trace(go.Scatter(x=freqs, y=mean_fake, mode='lines', name='딥보이스', line=dict(color='red', width=2)))
+            fig.add_trace(go.Scatter(x=freqs, y=mean_real, mode='lines', name='Real (실제 음성)', line=dict(color='blue', width=2)))
+            fig.add_trace(go.Scatter(x=freqs, y=mean_fake, mode='lines', name='Fake (딥보이스)', line=dict(color='red', width=2)))
             # 임계치
             threshold_hz = 11025
             fig.add_vline(x=threshold_hz, line_width=2, line_dash="dash", line_color="green")
             
             fig.update_layout(
-                title="<b>주파수별 에너지 분포</b>",
+                title="<b>주파수별 에너지 분포 (Real vs Fake)</b>",
                 xaxis_title="주파수 (Hz)", yaxis_title="에너지 (dB)", template="plotly_white", height=450,
                 xaxis=dict(range=[0, 22050]), yaxis=dict(range=[-80, 0]), legend=dict(x=0.8, y=0.95),
                 annotations=[dict(x=threshold_hz, y=-10, xref="x", yref="y", text="임계치 (11kHz)", showarrow=True, arrowhead=1, ax=40, ay=-40, font=dict(color="green", size=12))]
@@ -1061,23 +794,23 @@ with tab4:
             st.plotly_chart(fig, use_container_width=True)
             
             st.info(f"""
-            ### 주파수 스펙트럼 해석
+            ### 전문가 분석: 주파수 스펙트럼 심층 해석
             **1. 나이퀴스트 정리(Nyquist Theorem)와 '11kHz의 비밀'**
             * **원리:** 디지털 신호는 샘플링 속도의 **절반(1/2)**까지만 주파수를 표현할 수 있습니다.
             * **증거:** 이 파일은 48,000Hz 형식이지만, **딥보이스는 약 11,025Hz에서 에너지가 사라집니다.** 이는 **저화질(22kHz) AI 생성물**을 파일 형식만 고음질로 강제 변환했다는 증거입니다.
             
             **2. 🔵 실제 음성 vs 🔴 딥보이스**
             * **정상:** 16kHz 이상 초고주파 대역까지 에너지가 살아있고, 미세한 노이즈(Range 두께)가 관찰됩니다.
-            * **딥보이스:** 임계치 이후 에너지가 무음 범위인 -80dB로 떨어지며, 인위적으로 깨끗한 직선을 그립니다.
+            * **딥보이스:** 임계치 이후 에너지가 -80dB(완벽한 무음)로 떨어지며, 인위적으로 깨끗한 직선을 그립니다.
             """)
 
     st.markdown("---") 
-    st.header("유형별 범죄 흐름")
-    st.caption("유형별 단계 시퀀스와 전이 확률")
+    st.header("유형별 범죄 시나리오 흐름 (Scenario Flow)")
+    st.caption("데이터(`단계_전이.csv`)를 분석하여 가장 빈번한 '핵심 경로(Main Path)'와 파생되는 '변칙 경로'를 시각화했습니다.")
 
     # 1. 유형 선택 UI
     type_selection = st.radio(
-        "범죄 유형을 선택하세요:",
+        "분석할 범죄 유형을 선택하세요:",
         ("기관사칭형 (검찰/금감원 사칭)", "대출사기형 (저금리 대출 빙자)"),
         horizontal=True
     )
@@ -1215,6 +948,8 @@ with tab4:
                 }
             ]
         else:
+            # 대출사기 해석 팁
+            st.info(" **해석 포인트:** 대출 권유와 통제(심사) 단계를 오가며 신뢰를 쌓은 후, **'보증료/선입금'** 명목으로 금전을 요구하는 구조가 뚜렷합니다.")
             
             dot_code = generate_loan_chart(df_transitions)
             st.graphviz_chart(dot_code, use_container_width=True)
@@ -1255,7 +990,7 @@ with tab4:
 
         # (B) 하단 키워드 카드 영역 (공통 렌더링)
         st.markdown("#### 단계별 주요 식별 키워드 (Keyword Detail)")
-        st.caption(f"**{type_selection.split(' ')[0]}** 단계별 실제 사용된 주요 키워드 리스트")
+        st.caption(f"선택하신 **{type_selection.split(' ')[0]}**에서 범인이 실제로 사용하는 상세 어휘 리스트입니다.")
         
         cols = st.columns(5)
         for i, item in enumerate(keyword_data):
