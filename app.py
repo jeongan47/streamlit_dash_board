@@ -4,6 +4,7 @@ import numpy as np
 import altair as alt
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 # ✅ [추가] 오디오 분석용 라이브러리
 import librosa
 import matplotlib.pyplot as plt
@@ -227,16 +228,12 @@ with tab1:
     with col_main:
         st.markdown("**① 피해액(막대) 및 발생건수(선)**")
         
-        alt.renderers.set_embed_options(
-            renderer="svg",                 # 모바일에서 canvas 깨짐 방지
-            actions=False,                  # 우상단 메뉴 제거(모바일 안정)
-            autosize={"type": "fit-x", "contains": "padding"}  # 컨테이너 너비에 안정적으로 맞춤
-        )
+        alt.renderers.set_embed_options(renderer="svg", actions=False)
         alt.data_transformers.disable_max_rows()
 
-        # ------------------------------------------------------------------
-        # [1] 데이터 준비 (annual 데이터 사용)
-        # ------------------------------------------------------------------
+        # -------------------------------
+        # [1] 데이터 준비 (기존 로직 유지)
+        # -------------------------------
         target_types = ["기관사칭형", "대출사기형"]
         df_types = annual[annual["Type"].isin(target_types)].copy()
 
@@ -249,34 +246,30 @@ with tab1:
             )
             df_total["Type"] = "전체"
 
-        # --- Year 타입 통일 ---
+        # Year 타입 통일
         df_types["Year"] = pd.to_numeric(df_types["Year"], errors="coerce").fillna(0).astype(int)
         df_total["Year"] = pd.to_numeric(df_total["Year"], errors="coerce").fillna(0).astype(int)
 
-        # x축 순서 고정
         year_order = sorted(df_total["Year"].dropna().unique().tolist())
         x_year = alt.X("Year:O", title="연도", sort=year_order)
 
-        # 색상
         type_colors = ["#003366", "#87CEEB"]
 
-        # ------------------------------------------------------------------
-        # [2] 차트 생성 (기존 로직 유지)
-        # ------------------------------------------------------------------
+        # -------------------------------
+        # [2] 차트 생성 (기존 형태 유지 + 범례 위치만 아래로)
+        # -------------------------------
         base = alt.Chart(df_types).encode(x=x_year)
         stack_order = alt.Order("Type:N", sort="descending")
 
         bars = base.mark_bar().encode(
-            y=alt.Y(
-                "Loss_Eok:Q",
-                title="피해액(억원)",
-                axis=alt.Axis(titleColor="#003366", grid=True, orient="left"),
-                stack="zero"
-            ),
+            y=alt.Y("Loss_Eok:Q",
+                    title="피해액(억원)",
+                    axis=alt.Axis(titleColor="#003366", grid=True, orient="left"),
+                    stack="zero"),
             color=alt.Color(
                 "Type:N",
                 scale=alt.Scale(domain=target_types, range=type_colors),
-                legend=alt.Legend(title="유형")
+                legend=alt.Legend(title="유형", orient="bottom", direction="horizontal")  # ★ 오른쪽 → 아래
             ),
             order=stack_order,
             tooltip=["Year", "Type", alt.Tooltip("Loss_Eok", format=",", title="피해액(억원)")]
@@ -304,15 +297,13 @@ with tab1:
             )
         )
 
-        # 라인 차트: df_total
         line_base = alt.Chart(df_total).encode(x=x_year)
 
         lines = line_base.mark_line(color="#FF4B4B", point=True).encode(
-            y=alt.Y(
-                "Cases:Q",
-                title="전체 발생건수(건)",
-                axis=alt.Axis(titleColor="#FF4B4B", labelColor="#FF4B4B", orient="right", grid=False)
-            ),
+            y=alt.Y("Cases:Q",
+                    title="전체 발생건수(건)",
+                    axis=alt.Axis(titleColor="#FF4B4B", labelColor="#FF4B4B",
+                                    orient="right", grid=False)),
             tooltip=["Year", alt.Tooltip("Cases", format=",", title="발생건수(건)")]
         )
 
@@ -321,12 +312,10 @@ with tab1:
             text=alt.Text("Cases:Q", format=",")
         )
 
-        # 2023 주석(딥보이스 상용화)
+        # 2023 주석
         anno_df = pd.DataFrame([{"Year": 2023, "Label": "딥보이스 상용화"}])
 
-        rule = alt.Chart(anno_df).mark_rule(
-            color="red", strokeDash=[4, 4], opacity=0.7
-        ).encode(x=x_year)
+        rule = alt.Chart(anno_df).mark_rule(color="red", strokeDash=[4, 4], opacity=0.7).encode(x=x_year)
 
         text_top = alt.Chart(anno_df).mark_text(
             color="red", dy=6, fontSize=12, fontWeight="bold",
@@ -340,17 +329,28 @@ with tab1:
         layer_bar_group = bars + text_loan + text_imperson
         layer_line_group = lines + line_text + rule + text_top
 
+        # ★ 핵심: 모바일에서 압축되지 않도록 고정 폭으로 렌더링
         combined = (
             alt.layer(layer_bar_group, layer_line_group)
                 .resolve_scale(y="independent")
-                .properties(height=400, width="container")  # 모바일 컨테이너 폭 안정화
+                .properties(width=720, height=420)           # ← 고정 폭(원하는 값으로 조절)
                 .configure_axis(labelFontSize=11, titleFontSize=12)
-                .configure_axisX(labelOverlap=True)         # 좁은 화면 겹침 방지(깨짐처럼 보이는 현상 감소)
-                .configure_legend(labelFontSize=11, titleFontSize=12)
+                .configure_axisX(labelOverlap=True)
                 .configure_view(strokeWidth=0)
         )
 
-        st.altair_chart(combined, use_container_width=True)
+        # -------------------------------
+        # [3] Streamlit에서 "가로 스크롤"로 표시 (모바일 깨짐 방지)
+        # -------------------------------
+        chart_html = combined.to_html()  # vega-embed 포함 HTML 생성(보통 CDN 사용)
+        wrapper = f"""
+        <div style="width:100%; overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch;">
+            <div style="min-width:720px;">
+                {chart_html}
+            </div>
+        </div>
+        """
+        components.html(wrapper, height=470, scrolling=False)
         # ------------------------------------------------------------------
         # [3] 텍스트 분석 (df_total 사용)
         # ------------------------------------------------------------------
