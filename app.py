@@ -227,89 +227,106 @@ with tab1:
     with col_main:
         st.markdown("**① 피해액(막대) 및 발생건수(선)**")
         
+        alt.renderers.set_embed_options(
+            renderer="svg",                 # 모바일에서 canvas 깨짐 방지
+            actions=False,                  # 우상단 메뉴 제거(모바일 안정)
+            autosize={"type": "fit-x", "contains": "padding"}  # 컨테이너 너비에 안정적으로 맞춤
+        )
+        alt.data_transformers.disable_max_rows()
+
         # ------------------------------------------------------------------
         # [1] 데이터 준비 (annual 데이터 사용)
         # ------------------------------------------------------------------
-        # 1. 막대 그래프용 (유형별)
         target_types = ["기관사칭형", "대출사기형"]
-        df_types = annual[annual['Type'].isin(target_types)].copy()
-        
-        # 2. 라인 그래프용 (전체 합계)
-        if "전체" in annual['Type'].values:
-            df_total = annual[annual['Type'] == "전체"].copy()
+        df_types = annual[annual["Type"].isin(target_types)].copy()
+
+        if "전체" in annual["Type"].values:
+            df_total = annual[annual["Type"] == "전체"].copy()
         else:
-            df_total = annual.groupby('Year', as_index=False)[['Cases', 'Loss_Eok']].sum()
-            # 건당 피해액 계산 (분석 텍스트용)
-            df_total['Loss_Per_Case_Man'] = df_total.apply(
-                lambda x: (x['Loss_Eok'] * 10000) / x['Cases'] if x['Cases'] > 0 else 0, axis=1
+            df_total = annual.groupby("Year", as_index=False)[["Cases", "Loss_Eok"]].sum()
+            df_total["Loss_Per_Case_Man"] = df_total.apply(
+                lambda x: (x["Loss_Eok"] * 10000) / x["Cases"] if x["Cases"] > 0 else 0, axis=1
             )
-            df_total['Type'] = '전체'
+            df_total["Type"] = "전체"
 
-        # 색상 설정 (기존 코드 참조)
-        type_colors = ["#003366", "#87CEEB"]
-        
-        # ------------------------------------------------------------------
-        # [2] 차트 생성 (주신 코드 로직 유지)
-        # ------------------------------------------------------------------
-        # base를 df_types(annual 기반)로 변경
-        base = alt.Chart(df_types).encode(x=alt.X('Year:O', title='연도'))
-        stack_order = alt.Order('Type:N', sort='descending') 
-
-        bars = base.mark_bar().encode(
-            y=alt.Y('Loss_Eok:Q', title='피해액(억원)', axis=alt.Axis(titleColor='#003366', grid=True, orient='left'), stack='zero'),
-            color=alt.Color('Type:N', scale=alt.Scale(domain=target_types, range=type_colors), legend=alt.Legend(title="유형")),
-            order=stack_order, 
-            tooltip=['Year', 'Type', alt.Tooltip('Loss_Eok', format=',', title='피해액')]
-        )
-        
-        text_loan = base.mark_text(color='white', baseline='top', fontSize=10, dy=15).encode(
-            y=alt.Y('Loss_Eok:Q', stack='zero'),
-            detail='Type:N',
-            order=stack_order,
-            text=alt.condition((alt.datum.Type == '대출사기형') & (alt.datum.Loss_Eok > 0), alt.Text('Loss_Eok:Q', format=',.0f'), alt.value(''))
-        )
-
-        text_imperson = base.mark_text(color='white', baseline='top', fontSize=10, dy=5).encode(
-            y=alt.Y('Loss_Eok:Q', stack='zero'),
-            detail='Type:N',
-            order=stack_order,
-            text=alt.condition((alt.datum.Type != '대출사기형') & (alt.datum.Loss_Eok > 0), alt.Text('Loss_Eok:Q', format=',.0f'), alt.value(''))
-        )
-        
-        # 라인 차트 데이터: df_total(annual 기반) 사용
-        line_base = alt.Chart(df_total).encode(x=alt.X('Year:O', title='연도'))
-        
-        lines = line_base.mark_line(color='#FF4B4B', point=True).encode(
-            y=alt.Y('Cases:Q', title='전체 발생건수(건)', axis=alt.Axis(titleColor='#FF4B4B', labelColor='#FF4B4B', orient='right', grid=False)),
-            tooltip=['Year', alt.Tooltip('Cases', format=',', title='발생건수')]
-        )
-        
-        line_text = line_base.mark_text(dy=-15, color='#FF4B4B', fontSize=11, fontWeight='bold').encode(
-            y=alt.Y('Cases:Q'),
-            text=alt.Text('Cases:Q', format=',')
-        )
-
-        # --- (차트 만들기 직전) Year 타입 통일 ---
+        # --- Year 타입 통일 ---
         df_types["Year"] = pd.to_numeric(df_types["Year"], errors="coerce").fillna(0).astype(int)
         df_total["Year"] = pd.to_numeric(df_total["Year"], errors="coerce").fillna(0).astype(int)
 
-        # x축 순서(도메인) 고정: df_total 기준으로 2016~2025 같은 순서 유지
+        # x축 순서 고정
         year_order = sorted(df_total["Year"].dropna().unique().tolist())
-
-        # --- base / line_base의 x를 '동일한 sort'로 고정 ---
         x_year = alt.X("Year:O", title="연도", sort=year_order)
 
+        # 색상
+        type_colors = ["#003366", "#87CEEB"]
+
+        # ------------------------------------------------------------------
+        # [2] 차트 생성 (기존 로직 유지)
+        # ------------------------------------------------------------------
         base = alt.Chart(df_types).encode(x=x_year)
+        stack_order = alt.Order("Type:N", sort="descending")
+
+        bars = base.mark_bar().encode(
+            y=alt.Y(
+                "Loss_Eok:Q",
+                title="피해액(억원)",
+                axis=alt.Axis(titleColor="#003366", grid=True, orient="left"),
+                stack="zero"
+            ),
+            color=alt.Color(
+                "Type:N",
+                scale=alt.Scale(domain=target_types, range=type_colors),
+                legend=alt.Legend(title="유형")
+            ),
+            order=stack_order,
+            tooltip=["Year", "Type", alt.Tooltip("Loss_Eok", format=",", title="피해액(억원)")]
+        )
+
+        text_loan = base.mark_text(color="white", baseline="top", fontSize=10, dy=15).encode(
+            y=alt.Y("Loss_Eok:Q", stack="zero"),
+            detail="Type:N",
+            order=stack_order,
+            text=alt.condition(
+                (alt.datum.Type == "대출사기형") & (alt.datum.Loss_Eok > 0),
+                alt.Text("Loss_Eok:Q", format=",.0f"),
+                alt.value("")
+            )
+        )
+
+        text_imperson = base.mark_text(color="white", baseline="top", fontSize=10, dy=5).encode(
+            y=alt.Y("Loss_Eok:Q", stack="zero"),
+            detail="Type:N",
+            order=stack_order,
+            text=alt.condition(
+                (alt.datum.Type != "대출사기형") & (alt.datum.Loss_Eok > 0),
+                alt.Text("Loss_Eok:Q", format=",.0f"),
+                alt.value("")
+            )
+        )
+
+        # 라인 차트: df_total
         line_base = alt.Chart(df_total).encode(x=x_year)
 
-        # --- 2023 anno도 Year 타입 동일하게 + 동일 sort 적용 ---
+        lines = line_base.mark_line(color="#FF4B4B", point=True).encode(
+            y=alt.Y(
+                "Cases:Q",
+                title="전체 발생건수(건)",
+                axis=alt.Axis(titleColor="#FF4B4B", labelColor="#FF4B4B", orient="right", grid=False)
+            ),
+            tooltip=["Year", alt.Tooltip("Cases", format=",", title="발생건수(건)")]
+        )
+
+        line_text = line_base.mark_text(dy=-15, color="#FF4B4B", fontSize=11, fontWeight="bold").encode(
+            y=alt.Y("Cases:Q"),
+            text=alt.Text("Cases:Q", format=",")
+        )
+
+        # 2023 주석(딥보이스 상용화)
         anno_df = pd.DataFrame([{"Year": 2023, "Label": "딥보이스 상용화"}])
 
         rule = alt.Chart(anno_df).mark_rule(
             color="red", strokeDash=[4, 4], opacity=0.7
-        ).encode(
-            x=x_year
-        )
+        ).encode(x=x_year)
 
         text_top = alt.Chart(anno_df).mark_text(
             color="red", dy=6, fontSize=12, fontWeight="bold",
@@ -320,13 +337,20 @@ with tab1:
             text="Label:N"
         )
 
-
-
         layer_bar_group = bars + text_loan + text_imperson
         layer_line_group = lines + line_text + rule + text_top
-        combined = alt.layer(layer_bar_group, layer_line_group).resolve_scale(y="independent").properties(height=400)
-        st.altair_chart(combined, use_container_width=True)
 
+        combined = (
+            alt.layer(layer_bar_group, layer_line_group)
+                .resolve_scale(y="independent")
+                .properties(height=400, width="container")  # 모바일 컨테이너 폭 안정화
+                .configure_axis(labelFontSize=11, titleFontSize=12)
+                .configure_axisX(labelOverlap=True)         # 좁은 화면 겹침 방지(깨짐처럼 보이는 현상 감소)
+                .configure_legend(labelFontSize=11, titleFontSize=12)
+                .configure_view(strokeWidth=0)
+        )
+
+        st.altair_chart(combined, use_container_width=True)
         # ------------------------------------------------------------------
         # [3] 텍스트 분석 (df_total 사용)
         # ------------------------------------------------------------------
